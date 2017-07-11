@@ -54,8 +54,8 @@ class Patent
 		country: @country,
 		docnumber: @number,
 		kind: "A1",
-		"date-published": @pct_publication_date,
-		"dtd-version": "v1.3 2005-01-01",
+		:"date-published" => @pct_publication_date,
+		:"dtd-version" => "v1.3 2005-01-01",
 		lang: (@filing_language =~ /english/i ? 'en' : 'fr')
 	    ) do
 		xml.send("bibliographic-data") do
