@@ -273,9 +273,20 @@ class Patent
     parse_sequences
 
     puts @sequences
-
-    return
   end
+
+  def to_ice
+    builder = Nokogiri::XML::Builder.new(encoding: 'UTF-8') do |xml|
+      xml.wogene(action: "new", date: Date.today.to_s.gsub(/\-/,''), language: (@filing_language =~ /english/i ? 'en' : 'fr')) do
+        xml.biblio do
+        end
+        xml.sequences do
+        end
+      end
+    end
+    builder.to_xml
+  end
+
 end
 
 p = Patent.new(filename: 'http://www.google.com/patents/US7523026')
