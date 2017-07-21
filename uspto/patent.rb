@@ -16,10 +16,7 @@ class Patent
   attr_accessor :patent_citations
   attr_accessor :non_patent_citations
   attr_accessor :referenced_by
-  attr_accessor :us_classification
-  attr_accessor :international_classification
-  attr_accessor :cooperative_classification
-  attr_accessor :european_classification
+  attr_accessor :classifications
   attr_accessor :legal_events
   attr_accessor :sequences
 
@@ -30,13 +27,11 @@ class Patent
     self.alternate_numbers = []
     self.patent_citations = []
     self.non_patent_citations = []
-    self.us_classification = []
-    self.international_classification = []
-    self.cooperative_classification = []
-    self.european_classification = []
+    self.classifications = []
     self.claims = []
     self.referenced_by = []
     self.legal_events = []
+    self.sequences = []
 
     if args[:number]
       @number = args[:number]
@@ -60,6 +55,65 @@ class Patent
       @kind_code = $3
       puts "#{@country}, #{@number}, #{@kind_code}"
     end
+  end
+
+  def parse_sequences
+    text = @claims.map{|h| h[:text]}.join(' ') + " " + @description
+    text.gsub!(/[-\t\r\n\s ]+/,' ')
+
+    parse_nucleotides(text)
+    parse_proteins(text)
+    parse_amino_acids(text)
+    order_sequences
+  end
+
+  def parse_nucleotides(text)
+    dna_regex = /5′([ACGTU ]{4,})3′/i
+    nucl_regex = /(([ACGTU]{3,} ?)+([ACGTU]{1,2} )?)/
+    text.scan(dna_regex) { |m|
+      @sequences << {
+        position: Regexp.last_match.offset(0).first,
+        type:    'nucleotide',
+        sequence: $1.strip
+      }
+    }
+    text.scan(nucl_regex) { |m|
+      if ($1.strip.length >= 10)
+        @sequences << {
+          position: Regexp.last_match.offset(0).first,
+          type:    'nucleotide',
+          sequence: $1.strip
+        }
+      end
+    }
+  end
+
+  def parse_proteins(text)
+    protein_regex = /(((Ala|Arg|Asn|Asp|Cys|Glu|Gln|Gly|His|Ile|Leu|Lys|Met|Phe|Pro|Ser|Thr|Trp|Tyr|Val|Xaa) ?){3,})/i
+    text.scan(protein_regex) { |m|
+      @sequences << {
+        position: Regexp.last_match.offset(0).first,
+        type:     'protein',
+        sequence: $1.gsub(/([A-Z]{3})/i, '\1 ').gsub(/ (?=( |$))/,'')
+      }
+    }
+  end
+
+  def parse_amino_acids(text)
+    amino_regex = /(?:[Pp]eptides?|[Pp]roteins?|[Ss]equences?)[:, ]*([A-Z]{6,})/
+    text.scan(amino_regex) { |m|
+      @sequences << {
+        position: Regexp.last_match.offset(0).first,
+        type:     'protein',
+        sequence: $1.strip
+      }
+    }
+  end
+
+  def order_sequences
+    @sequences.sort!{|x,y| x[:position] <=> y[:position]}
+    @sequences.uniq!{|x| x[:sequence]}
+    @sequences.each_with_index {|x, i| x[:position] = i + 1}
   end
 
   def parse_html(url)
@@ -116,12 +170,13 @@ class Patent
 
     if (abstract = doc.css("abstract"))
       @abstract = abstract.text.strip
-      #puts @abstract
     end
 
-    if (description = doc.css("ul.description"))
+    if !(description = doc.css("ul.description")).empty?
       @description = description.text.strip
-      #puts @description
+    else
+      description = doc.css("div.description")
+      @description = description.text.strip
     end
 
     if (claims = doc.css("div.claims div.claim div.claim"))
@@ -141,6 +196,32 @@ class Patent
         if reference["class"] == "patent-section patent-tabular-section"
           if (title = reference.css("div.patent-section-header span.patent-section-title"))
             case title.text
+            when "Patent Citations"
+              footer = reference.css("div.patent-section-footer")
+              reference.css("table.patent-data-table tr").each do |tr|
+                tds = tr.css("td")
+                unless tds.to_s.empty?
+                  @patent_citations << {
+                    "Citing Patent": tds[0].text,
+                    "Filing date": tds[1].text,
+                    "Publication date": tds[2].text,
+                    "Applicant": tds[3].text,
+                    "Title": tds[4].text,
+                    "Note": (tds[0].text =~ /\*/ ? footer.text : "")
+                  }
+                end
+              end
+            when "Non-Patent Citations"
+              footer = reference.css("div.patent-section-footer")
+              reference.css("table.patent-data-table tr").each do |tr|
+                tds = tr.css("td")
+                unless tds.to_s.empty?
+                  @non_patent_citations << {
+                    "Number": tds[0].text,
+                    "Title": tds[2].text
+                  }
+                end
+              end
             when "Referenced by"
               footer = reference.css("div.patent-section-footer")
               reference.css("table.patent-data-table tr").each do |tr|
@@ -157,15 +238,44 @@ class Patent
                 end
               end
             when "Classifications"
+              reference.css("table.patent-data-table tr").each do |tr|
+                if tr["class"].to_s.empty?
+                  tds = tr.css("td")
+                  unless tds.to_s.empty?
+                    @classifications << { "#{tds[0].text}": tds[1].text.to_s.split(/, */) }
+                  end
+                end
+              end
             when "Legal Events"
+              reference.css("table.patent-data-table tr").each do |tr|
+                tds = tr.css("td")
+                unless tds.to_s.empty?
+                  description = []
+                  tds[3].css("div.nested-key-value").each do |div|
+                    description << {
+                      "#{div.css("span.nested-key").text.gsub(/\s*\:\s*/,'')}": div.css("span.nested-value").text
+                    }
+                  end
+                  @legal_events << {
+                    "Date": tds[0].text,
+                    "Code": tds[1].text,
+                    "Event": tds[2].text,
+                    "Description": description
+                  }
+                end
+              end
             end
           end
         end
       end
     end
 
+    parse_sequences
+
+    puts @sequences
+
     return
   end
 end
 
-p = Patent.new(filename: 'https://www.google.com/patents/US20030162167')
+p = Patent.new(filename: 'http://www.google.com/patents/US7523026')
